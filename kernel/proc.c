@@ -116,6 +116,15 @@ found:
     return 0;
   }
 
+  // set kernel stack
+  p->k_pagetable = new_kvminit();
+  char *pa = kalloc();
+  if(pa == 0)
+    panic("kalloc");
+  uint64 va = TRAMPOLINE - 2 * PGSIZE;
+  mappages(p->k_pagetable, va, PGSIZE, pa, PTE_R | PTE_W);
+  p->kstack = va;
+  
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){

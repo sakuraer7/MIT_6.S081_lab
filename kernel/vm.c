@@ -23,6 +23,7 @@ void
 kvminit()
 {
   kernel_pagetable = new_kvminit();
+  kvkmmap(kernel_pagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
 }
 /*void
 kvminit()
@@ -67,7 +68,8 @@ new_kvminit()
   kvkmmap(kpagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
 
   // CLINT
-  kvkmmap(kpagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+  // only global kernel page table need CLINT, because CLINT addr is 0x2000000L, it less PLIC. user page can cover CLINT
+  // kvkmmap(kpagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
 
   // PLIC
   kvkmmap(kpagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
