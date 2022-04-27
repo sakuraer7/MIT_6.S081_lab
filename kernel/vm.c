@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -23,6 +25,7 @@ void
 kvminit()
 {
   kernel_pagetable = new_kvminit();
+  printf("kernel_pagetable init done\n");
   kvkmmap(kernel_pagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
 }
 /*void
@@ -162,9 +165,9 @@ kvmmap(uint64 va, uint64 pa, uint64 sz, int perm)
 
 // 
 void
-kvkmmp(pagetable_t pagetable, uint64 va, uint64 pa, uint64 sz, int perm)
+kvkmmap(pagetable_t pagetable, uint64 va, uint64 pa, uint64 sz, int perm)
 {
-  if(mappages(pagetable, va, pa, sz, perm) != 0) {
+  if(mappages(pagetable, va, sz, pa, perm) != 0) {
     panic("kvkmmp");
   }
 }
@@ -179,7 +182,9 @@ kvmpa(uint64 va)
   pte_t *pte;
   uint64 pa;
   
-  pte = walk(kernel_pagetable, va, 0);
+  //pte = walk(kernel_pagetable, va, 0);
+  // get user kernel page table instead of global
+  pte = walk(myproc()->k_pagetable, va, 0);
   if(pte == 0)
     panic("kvmpa");
   if((*pte & PTE_V) == 0)
@@ -346,6 +351,20 @@ uvmfree(pagetable_t pagetable, uint64 sz)
   freewalk(pagetable);
 }
 
+// user page table copy to kernel page table, not copy physis memory
+void
+vmcopypage(pagetable_t upage, pagetable_t kpage, uint64 start, uint64 sz) 
+{
+  for(uint64 i=start; i<start+sz; i+=PGSIZE) {
+    // 这里将用户页表添加到内核页表，所以得到用户的pte，而内核页表需要新建pte
+    pte_t* pte = walk(upage, i, 0);
+    pte_t* kpte = walk(kpage, i, 1);
+    if(!pte || !kpte)
+      panic("vmcopypage");
+    // 将用户页表映射关系添加到内核页表
+    *kpte = (*pte) & ~(PTE_U|PTE_X|PTE_W);
+  }
+}
 // Given a parent process's page table, copy
 // its memory into a child's page table.
 // Copies both the page table and the
@@ -423,7 +442,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 // Copy from user to kernel.
 // Copy len bytes to dst from virtual address srcva in a given page table.
 // Return 0 on success, -1 on error.
-int
+/*int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
   uint64 n, va0, pa0;
@@ -443,13 +462,18 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
     srcva = va0 + PGSIZE;
   }
   return 0;
-}
+}*/
 
+int
+copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
+{
+  return copyin_new(pagetable, dst, srcva, len);
+}
 // Copy a null-terminated string from user to kernel.
 // Copy bytes to dst from virtual address srcva in a given page table,
 // until a '\0', or max.
 // Return 0 on success, -1 on error.
-int
+/*int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
   uint64 n, va0, pa0;
@@ -486,8 +510,13 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
-}
+}*/
 
+int
+copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
+{
+  return copyinstr_new(pagetable, dst, srcva, max);
+}
 void
 traverse(pagetable_t pagetable, int level)
 {

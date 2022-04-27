@@ -23,6 +23,7 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+extern pagetable_t kernel_pagetable;
 // initialize the proc table at boot time.
 void
 procinit(void)
@@ -122,7 +123,7 @@ found:
   if(pa == 0)
     panic("kalloc");
   uint64 va = TRAMPOLINE - 2 * PGSIZE;
-  mappages(p->k_pagetable, va, PGSIZE, pa, PTE_R | PTE_W);
+  mappages(p->k_pagetable, va, PGSIZE, (uint64)pa, PTE_R | PTE_W);
   p->kstack = va;
   
   // An empty user page table.
@@ -154,6 +155,9 @@ freeproc(struct proc *p)
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+  if(p->k_pagetable)
+    proc_freekpagetable(p->pagetable, p->kstack, p->sz);
+  p->k_pagetable = 0;
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -206,7 +210,20 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
   uvmfree(pagetable, sz);
 }
-
+// Free a process's kenel page table, and free the
+// physical memory it refers to.
+void
+proc_freekpagetable(pagetable_t pagetable, uint64 kstack, uint64 sz)
+{
+  uvmunmap(pagetable, UART0, 1, 0);
+  uvmunmap(pagetable, VIRTIO0, 1, 0);
+  uvmunmap(pagetable, PLIC, 0x400000/PGSIZE, 0);
+  uvmunmap(pagetable, KERNBASE, ((uint64)etext-KERNBASE)/PGSIZE, 0);
+  uvmunmap(pagetable, (uint64)etext, (PHYSTOP-(uint64)etext)/PGSIZE, 0);
+  uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+  uvmunmap(pagetable, kstack, 1, 0);
+  uvmfree(pagetable, 0);
+}
 // a user program that calls exec("/init")
 // od -t xC initcode
 uchar initcode[] = {
@@ -286,7 +303,7 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
-
+  vmcopypage(np->pagetable, np->k_pagetable, 0, np->sz);
   np->parent = p;
 
   // copy saved user registers.
@@ -485,8 +502,12 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        w_satp(MAKE_SATP(p->k_pagetable));
+        sfence_vma();
         swtch(&c->context, &p->context);
 
+        // after complete, switch back
+        kvminithart();
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
@@ -498,6 +519,8 @@ scheduler(void)
 #if !defined (LAB_FS)
     if(found == 0) {
       intr_on();
+      w_satp(MAKE_SATP(kernel_pagetable));
+      sfence_vma();
       asm volatile("wfi");
     }
 #else
