@@ -156,7 +156,7 @@ freeproc(struct proc *p)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
   if(p->k_pagetable)
-    proc_freekpagetable(p->pagetable, p->kstack, p->sz);
+    proc_freekpagetable(p->k_pagetable, p->kstack, p->sz);
   p->k_pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -221,7 +221,8 @@ proc_freekpagetable(pagetable_t pagetable, uint64 kstack, uint64 sz)
   uvmunmap(pagetable, KERNBASE, ((uint64)etext-KERNBASE)/PGSIZE, 0);
   uvmunmap(pagetable, (uint64)etext, (PHYSTOP-(uint64)etext)/PGSIZE, 0);
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
-  uvmunmap(pagetable, kstack, 1, 0);
+  uvmunmap(pagetable, kstack, 1, 1);
+  uvmunmap(pagetable, 0, PGROUNDUP(sz)/PGSIZE, 0);
   uvmfree(pagetable, 0);
 }
 // a user program that calls exec("/init")
@@ -249,7 +250,7 @@ userinit(void)
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
-
+  vmcopypage(p->pagetable, p->k_pagetable, 0, PGSIZE);
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
@@ -277,6 +278,9 @@ growproc(int n)
     }
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+  }
+  if(sz >= PLIC) {
+    return -1;
   }
   p->sz = sz;
   return 0;
@@ -519,8 +523,6 @@ scheduler(void)
 #if !defined (LAB_FS)
     if(found == 0) {
       intr_on();
-      w_satp(MAKE_SATP(kernel_pagetable));
-      sfence_vma();
       asm volatile("wfi");
     }
 #else
